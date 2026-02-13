@@ -1,112 +1,101 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { addTree } from '@/services/db'; // Импортируем нашу функцию
+import React, { useState } from 'react';
+import { Alert, Button, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Collapsible } from '@/components/ui/collapsible';
-import { ExternalLink } from '@/components/external-link';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Fonts } from '@/constants/theme';
+export default function AddTreeScreen() {
+  const [qrCode, setQrCode] = useState('');
+  const [name, setName] = useState('');
+  const [location, setLocation] = useState('');
+  const [status, setStatus] = useState('Здорово');
 
-export default function TabTwoScreen() {
+  const handleSave = () => {
+    // 1. Простая валидация
+    if (!qrCode || !name || !location) {
+      Alert.alert('Ошибка', 'Заполните QR код, название и местоположение');
+      return;
+    }
+
+    // 2. Сохраняем в SQLite
+    const result = addTree(qrCode, name, location, status);
+
+    if (result.success) {
+      Alert.alert('Успех!', `Дерево "${name}" добавлено в базу.`);
+      // Очищаем форму
+      setQrCode('');
+      setName('');
+      setLocation('');
+      setStatus('Здорово');
+    } else {
+      Alert.alert('Ошибка', 'Возможно, такой QR код уже есть в базе.');
+    }
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
-          style={styles.headerImage}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText
-          type="title"
-          style={{
-            fontFamily: Fonts.rounded,
-          }}>
-          Explore
-        </ThemedText>
-      </ThemedView>
-      <ThemedText>This app includes example code to help you get started.</ThemedText>
-      <Collapsible title="File-based routing">
-        <ThemedText>
-          This app has two screens:{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
-        </ThemedText>
-        <ThemedText>
-          The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText>{' '}
-          sets up the tab navigator.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/router/introduction">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Android, iOS, and web support">
-        <ThemedText>
-          You can open this project on Android, iOS, and the web. To open the web version, press{' '}
-          <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
-        </ThemedText>
-      </Collapsible>
-      <Collapsible title="Images">
-        <ThemedText>
-          For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for
-          different screen densities
-        </ThemedText>
-        <Image
-          source={require('@/assets/images/react-logo.png')}
-          style={{ width: 100, height: 100, alignSelf: 'center' }}
-        />
-        <ExternalLink href="https://reactnative.dev/docs/images">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Light and dark mode components">
-        <ThemedText>
-          This template has light and dark mode support. The{' '}
-          <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
-          what the user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Animations">
-        <ThemedText>
-          This template includes an example of an animated component. The{' '}
-          <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses
-          the powerful{' '}
-          <ThemedText type="defaultSemiBold" style={{ fontFamily: Fonts.mono }}>
-            react-native-reanimated
-          </ThemedText>{' '}
-          library to create a waving hand animation.
-        </ThemedText>
-        {Platform.select({
-          ios: (
-            <ThemedText>
-              The <ThemedText type="defaultSemiBold">components/ParallaxScrollView.tsx</ThemedText>{' '}
-              component provides a parallax effect for the header image.
-            </ThemedText>
-          ),
-        })}
-      </Collapsible>
-    </ParallaxScrollView>
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <Text style={styles.header}>🌱 Новое дерево</Text>
+
+          <Text style={styles.label}>QR Код (ID):</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Например: tree_005"
+            value={qrCode}
+            onChangeText={setQrCode}
+            autoCapitalize="none"
+          />
+
+          <Text style={styles.label}>Название породы:</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Например: Сосна Обыкновенная"
+            value={name}
+            onChangeText={setName}
+          />
+
+          <Text style={styles.label}>Местоположение:</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Например: Сектор В, Ряд 2"
+            value={location}
+            onChangeText={setLocation}
+          />
+
+          <Text style={styles.label}>Состояние:</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Здорово / Болеет"
+            value={status}
+            onChangeText={setStatus}
+          />
+
+          <View style={styles.buttonContainer}>
+            <Button title="💾 Сохранить в базу" onPress={handleSave} color="#2ecc71" />
+          </View>
+
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: '#808080',
-    bottom: -90,
-    left: -35,
-    position: 'absolute',
+  container: { flex: 1, backgroundColor: '#fff' },
+  scrollContent: { padding: 20 },
+  header: { fontSize: 28, fontWeight: 'bold', marginBottom: 30, textAlign: 'center', color: '#27ae60' },
+  label: { fontSize: 16, fontWeight: '600', marginBottom: 8, color: '#34495e' },
+  input: {
+    borderWidth: 1,
+    borderColor: '#bdc3c7',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    marginBottom: 20,
+    backgroundColor: '#f9f9f9',
   },
-  titleContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
+  buttonContainer: { marginTop: 10 }
 });
