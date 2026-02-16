@@ -1,12 +1,15 @@
-import { getAllTrees } from '@/services/db';
+import { getAllTrees, syncDataWithServer } from '@/services/db';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
+// Добавили Alert и Button в импорты!
+import { ActivityIndicator, Alert, Button, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
 
 export default function ListScreen() {
     const [trees, setTrees] = useState<any[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
+    const [isSyncing, setIsSyncing] = useState(false);
 
     // useFocusEffect обновляет список каждый раз, когда мы открываем эту вкладку
     useFocusEffect(
@@ -44,10 +47,37 @@ export default function ListScreen() {
         </View>
     );
 
+    // Функция синхронизации с Supabase
+    const handleSync = async () => {
+        setIsSyncing(true);
+        const result = await syncDataWithServer();
+        setIsSyncing(false);
+
+        Alert.alert(result.success ? 'Отлично!' : 'Внимание', result.message);
+        loadTrees(); // Перезагружаем список
+    };
+
+    // Функция выгрузки в Excel/CSV
+
+
     return (
         <SafeAreaView style={styles.container}>
             <Text style={styles.header}>База деревьев</Text>
             <Text style={styles.subHeader}>Всего записей: {trees.length}</Text>
+
+            {/* 👇 ВСТАВИЛИ КНОПКИ СЮДА 👇 */}
+            <View style={styles.actionButtonsContainer}>
+                <View style={styles.syncContainer}>
+                    {isSyncing ? (
+                        <ActivityIndicator size="large" color="#27ae60" />
+                    ) : (
+                        <Button title="☁️ Синхронизировать с БД" onPress={handleSync} color="#27ae60" />
+                    )}
+                </View>
+
+
+            </View>
+            {/* 👆 КОНЕЦ КНОПОК 👆 */}
 
             <TextInput
                 style={styles.searchInput}
@@ -63,6 +93,7 @@ export default function ListScreen() {
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={<Text style={styles.emptyText}>Ничего не найдено</Text>}
             />
+
         </SafeAreaView>
     );
 }
@@ -71,6 +102,12 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#f5f6fa' },
     header: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginTop: 10, color: '#2f3640' },
     subHeader: { fontSize: 14, textAlign: 'center', color: '#7f8fa6', marginBottom: 15 },
+
+    // Новые стили для контейнеров кнопок
+    actionButtonsContainer: { paddingHorizontal: 15, marginBottom: 15 },
+    syncContainer: { marginBottom: 10, borderRadius: 8, overflow: 'hidden' },
+    exportContainer: { borderRadius: 8, overflow: 'hidden' },
+
     searchInput: {
         backgroundColor: '#fff',
         marginHorizontal: 15,

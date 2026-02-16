@@ -1,7 +1,9 @@
+import { supabase } from '@/supabaseClient';
+import { decode } from 'base64-arraybuffer';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as SQLite from 'expo-sqlite';
-
 // Открываем (или создаем) файл базы данных 'trees.db' на телефоне
-const db = SQLite.openDatabaseSync('trees.db');
+const db = SQLite.openDatabaseSync('trees_v4.db');
 
 // 1. Инициализация таблиц
 export const initDB = () => {
@@ -14,17 +16,22 @@ export const initDB = () => {
           name TEXT,
           planted_date TEXT,
           location TEXT,
-          status TEXT
+          status TEXT,
+          lat REAL,
+          lng REAL,
+          is_synced INTEGER DEFAULT 0 -- НОВЫЙ ФЛАГ
         );
       `);
       
-      // НОВАЯ: Таблица истории ухода
       db.execSync(`
         CREATE TABLE IF NOT EXISTS care_history (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           tree_id INTEGER,
+          tree_qr TEXT, -- НОВОЕ: сохраняем QR для удобной связки с сервером
           action TEXT,
-          date_time TEXT
+          date_time TEXT,
+          photo_uri TEXT,
+          is_synced INTEGER DEFAULT 0 -- НОВЫЙ ФЛАГ
         );
       `);
       console.log('Таблицы готовы');
@@ -64,17 +71,15 @@ export const getTreeByQR = (qrCode: string) => {
   }
 };
 
-export const addTree = (qr_code: string, name: string, location: string, status: string) => {
+export const addTree = (qr_code: string, name: string, location: string, status: string, lat: number | null, lng: number | null) => {
     try {
-      const planted_date = new Date().toISOString().split('T')[0]; // Текущая дата YYYY-MM-DD
-      
-      const result = db.runSync(
-        `INSERT INTO trees (qr_code, name, planted_date, location, status) VALUES (?, ?, ?, ?, ?)`,
-        [qr_code, name, planted_date, location, status]
+      const planted_date = new Date().toISOString().split('T')[0];
+      db.runSync(
+        `INSERT INTO trees (qr_code, name, planted_date, location, status, lat, lng, is_synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+        [qr_code, name, planted_date, location, status, lat, lng]
       );
-      return { success: true, id: result.lastInsertRowId };
+      return { success: true };
     } catch (error) {
-      console.error('Ошибка добавления:', error);
       return { success: false, error: error };
     }
   };
@@ -101,27 +106,23 @@ export const getAllTrees = () => {
     }
   };
 
-  export const addCareRecord = (treeId: number, actionName: string) => {
+// Запись действия в историю (с фото и QR-кодом для синхронизации)
+export const addCareRecord = (treeId: number, treeQr: string, actionName: string, photoUri: string | null = null) => {
     try {
       const now = new Date();
-      // Форматируем дату и время, например: "13.02.2026, 14:30"
       const dateTime = now.toLocaleString('ru-RU', { 
         day: '2-digit', month: '2-digit', year: 'numeric', 
         hour: '2-digit', minute: '2-digit' 
       });
   
-      // 1. Добавляем запись в лог истории
+      // Сохраняем историю с путем к фото
       db.runSync(
-        `INSERT INTO care_history (tree_id, action, date_time) VALUES (?, ?, ?)`,
-        [treeId, actionName, dateTime]
+        `INSERT INTO care_history (tree_id, tree_qr, action, date_time, photo_uri, is_synced) VALUES (?, ?, ?, ?, ?, 0)`,
+        [treeId, treeQr, actionName, dateTime, photoUri]
       );
   
-      // 2. Параллельно обновляем текущий статус у самого дерева
       const shortStatus = `${actionName} (${now.toLocaleDateString('ru-RU')})`;
-      db.runSync(
-        `UPDATE trees SET status = ? WHERE id = ?`,
-        [shortStatus, treeId]
-      );
+      db.runSync(`UPDATE trees SET status = ?, is_synced = 0 WHERE id = ?`, [shortStatus, treeId]);
   
       return { success: true, newStatus: shortStatus, dateTime };
     } catch (error) {
@@ -137,5 +138,97 @@ export const getAllTrees = () => {
     } catch (error) {
       console.error('Ошибка получения истории:', error);
       return [];
+    }
+  };
+
+ // 9. ГЛОБАЛЬНАЯ СИНХРОНИЗАЦИЯ С СЕРВЕРОМ (С ФОТОГРАФИЯМИ)
+export const syncDataWithServer = async () => {
+    try {
+      // @ts-ignore
+      const unsyncedTrees = db.getAllSync('SELECT * FROM trees WHERE is_synced = 0');
+      // @ts-ignore
+      const unsyncedHistory = db.getAllSync('SELECT * FROM care_history WHERE is_synced = 0');
+  
+      if (unsyncedTrees.length === 0 && unsyncedHistory.length === 0) {
+        return { success: true, message: 'Все данные уже на сервере.' };
+      }
+  
+      // --- 1. ОТПРАВЛЯЕМ ДЕРЕВЬЯ ---
+      if (unsyncedTrees.length > 0) {
+        const treesToPush = unsyncedTrees.map((t: any) => ({
+          qr_code: t.qr_code, name: t.name, location: t.location,
+          planted_date: t.planted_date, status: t.status, lat: t.lat, lng: t.lng
+        }));
+  
+        const { error: treeError } = await supabase.from('trees').upsert(treesToPush);
+        if (treeError) throw treeError;
+  
+        db.runSync('UPDATE trees SET is_synced = 1 WHERE is_synced = 0');
+      }
+  
+      // --- 2. ОТПРАВЛЯЕМ ИСТОРИЮ И ФОТО ---
+      if (unsyncedHistory.length > 0) {
+        const historyToPush = [];
+  
+        for (const h of unsyncedHistory as any[]) {
+          let finalPhotoUri = h.photo_uri;
+  
+          // ПЕРЕХВАТЧИК: Если есть фото с Айфона
+          if (finalPhotoUri && finalPhotoUri.startsWith('file://')) {
+            try {
+              console.log("Грузим фото на сервер...");
+              // 1. Читаем файл как текст (base64)
+              const base64 = await FileSystem.readAsStringAsync(finalPhotoUri, { encoding: 'base64' });
+              
+              // 2. Генерируем уникальное имя файла
+              const fileName = `${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+  
+              // 3. Отправляем в Storage (бакет tree_photos)
+              const { error: uploadError } = await supabase.storage
+                .from('tree_photos')
+                .upload(fileName, decode(base64), { contentType: 'image/jpeg' });
+  
+              if (uploadError) {
+                console.error("Ошибка Storage:", uploadError);
+                throw uploadError;
+              }
+  
+              // 4. Получаем публичную веб-ссылку
+              const { data: publicUrlData } = supabase.storage
+                .from('tree_photos')
+                .getPublicUrl(fileName);
+  
+              // 5. Заменяем локальный file:// на облачный https://
+              finalPhotoUri = publicUrlData.publicUrl;
+              console.log("Успех! Ссылка:", finalPhotoUri);
+              
+            } catch (uploadErr) {
+              console.error('Ошибка загрузки фото, отправляем без него:', uploadErr);
+            }
+          }
+  
+          historyToPush.push({
+            tree_qr: h.tree_qr,
+            action: h.action,
+            date_time: h.date_time,
+            photo_uri: finalPhotoUri // Сюда ляжет правильная ссылка
+          });
+        }
+  
+        // Отправляем готовую историю в PostgreSQL
+        const { error: historyError } = await supabase.from('care_history').insert(historyToPush);
+        if (historyError) throw historyError;
+  
+        db.runSync('UPDATE care_history SET is_synced = 1 WHERE is_synced = 0');
+      }
+  
+      return { 
+        success: true, 
+        message: `Синхронизировано: ${unsyncedTrees.length} деревьев, ${unsyncedHistory.length} записей.` 
+      };
+  
+    } catch (error: any) {
+      console.error('Сбой синхронизации:', error.message);
+      return { success: false, message: 'Ошибка связи с сервером.' };
     }
   };
